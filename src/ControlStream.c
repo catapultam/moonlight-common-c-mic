@@ -140,6 +140,7 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 #define IDX_SET_MOTION_EVENT 10
 #define IDX_SET_RGB_LED 11
 #define IDX_DS_ADAPTIVE_TRIGGERS 12
+#define IDX_EXEC_SERVER_CMD 13
 
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
@@ -157,6 +158,8 @@ static const short packetTypesGen3[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set Adaptive Triggers (unused)
+    -1,     // Execute server command (unused)
 };
 static const short packetTypesGen4[] = {
     0x0606, // Request IDR frame
@@ -171,6 +174,8 @@ static const short packetTypesGen4[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set Adaptive Triggers (unused)
+    -1,     // Execute server command (unused)
 };
 static const short packetTypesGen5[] = {
     0x0305, // Start A
@@ -185,6 +190,8 @@ static const short packetTypesGen5[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set Adaptive Triggers (unused)
+    -1,     // Execute server command (unused)
 };
 static const short packetTypesGen7[] = {
     0x0305, // Start A
@@ -199,6 +206,8 @@ static const short packetTypesGen7[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set Adaptive Triggers (unused)
+    -1,     // Execute server command (unused)
 };
 static const short packetTypesGen7Enc[] = {
     0x0302, // Request IDR frame
@@ -214,6 +223,7 @@ static const short packetTypesGen7Enc[] = {
     0x5501, // Set motion event (Sunshine protocol extension)
     0x5502, // Set RGB LED (Sunshine protocol extension)
     0x5503, // Set Adaptive Triggers (Sunshine protocol extension)
+    0x3000, // Execute server command (Apollo protocol extension)
 };
 
 static const char requestIdrFrameGen3[] = { 0, 0 };
@@ -1695,6 +1705,32 @@ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t chan
 
     // Send the input data (no reply expected)
     if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data, channelId, flags, moreData) == 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+// Runs a command that the host has configured, selected by its zero-based index
+int LiSendExecServerCmd(uint8_t cmdId) {
+    uint8_t payload[4] = { cmdId, 0, 0, 0 };
+
+    // The packet type exists only in the encrypted control stream table, so an
+    // older host or an unencrypted control stream cannot carry this message
+    if (packetTypes == NULL || packetTypes[IDX_EXEC_SERVER_CMD] == -1) {
+        return LI_ERR_UNSUPPORTED;
+    }
+
+    if (peer == NULL) {
+        return -1;
+    }
+
+    if (!sendMessageAndForget(packetTypes[IDX_EXEC_SERVER_CMD],
+                              sizeof(payload),
+                              payload,
+                              CTRL_CHANNEL_SERVERCTL,
+                              ENET_PACKET_FLAG_RELIABLE,
+                              false)) {
         return -1;
     }
 

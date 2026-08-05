@@ -839,6 +839,13 @@ int LiSendControllerMotionEvent(uint8_t controllerNumber, uint8_t motionType, fl
 #define LI_BATTERY_PERCENTAGE_UNKNOWN 0xFF
 int LiSendControllerBatteryEvent(uint8_t controllerNumber, uint8_t batteryState, uint8_t batteryPercentage);
 
+// This function runs a command that the host has configured. The command is selected by
+// its zero-based index in the list of commands that the host reports in its server info.
+//
+// If unsupported by the host, this will return LI_ERR_UNSUPPORTED. Support needs an Apollo
+// host and an encrypted control stream.
+int LiSendExecServerCmd(uint8_t cmdId);
+
 // This function queues a vertical scroll event to the remote server.
 // The number of "clicks" is multiplied by WHEEL_DELTA (120) before
 // being sent to the PC.
