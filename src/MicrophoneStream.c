@@ -1,7 +1,8 @@
 #include "Limelight-internal.h"
 #include "PlatformSockets.h"
 
-#define MIC_IV_LEN 16
+#include <inttypes.h>
+
 #define MIC_HEADER_FLAGS 0x00
 #define MIC_DEFAULT_FRAME_DURATION_SAMPLES 960
 
@@ -10,6 +11,7 @@ static PPLT_CRYPTO_CONTEXT micEncryptionCtx = NULL;
 static uint32_t micRiKeyId = 0;
 static uint16_t micSequenceNumber = 0;
 static uint32_t micTimestamp = 0;
+static bool micFirstPacketLogged = false;
 
 #pragma pack(push, 1)
 typedef struct _MICROPHONE_PACKET_HEADER {
@@ -35,6 +37,7 @@ int initializeMicrophoneStream(void) {
     micRiKeyId = BE32(micRiKeyId);
     micSequenceNumber = 0;
     micTimestamp = 0;
+    micFirstPacketLogged = false;
 
     micSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
     if (micSocket == INVALID_SOCKET) {
@@ -60,6 +63,7 @@ void destroyMicrophoneStream(void) {
     micRiKeyId = 0;
     micSequenceNumber = 0;
     micTimestamp = 0;
+    micFirstPacketLogged = false;
 }
 
 int LiSendMicrophoneOpusData(const unsigned char* opusData, int opusLength) {
@@ -90,26 +94,15 @@ int LiSendMicrophoneOpusDataEx(const unsigned char* opusData, int opusLength, ui
     header.ssrc = LE32(MIC_PACKET_MAGIC);
 
     if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && micEncryptionCtx != NULL) {
-        unsigned char iv[MIC_IV_LEN] = {0};
         unsigned char encryptedData[ROUND_TO_PKCS7_PADDED_LEN(MAX_MIC_PACKET_SIZE)];
-        // PKCS7 padding may need to be added in-place, so we must copy this into a buffer
-        // that can safely be modified.
-        unsigned char paddedData[ROUND_TO_PKCS7_PADDED_LEN(MAX_MIC_PACKET_SIZE)];
         int encryptedLength = (int)sizeof(encryptedData);
-        uint32_t ivSeq = BE32(micRiKeyId + micSequenceNumber);
 
-        memcpy(iv, &ivSeq, sizeof(ivSeq));
-        memcpy(paddedData, opusData, opusLength);
-
-        if (!PltEncryptMessage(micEncryptionCtx,
-                               ALGORITHM_AES_CBC,
-                               CIPHER_FLAG_RESET_IV | CIPHER_FLAG_FINISH | CIPHER_FLAG_PAD_TO_BLOCK_SIZE,
-                               (unsigned char*)StreamConfig.remoteInputAesKey,
-                               sizeof(StreamConfig.remoteInputAesKey),
-                               iv, sizeof(iv),
-                               NULL, 0,
-                               paddedData, opusLength,
-                               encryptedData, &encryptedLength)) {
+        if (!encryptMicrophonePacket(micEncryptionCtx,
+                                     (unsigned char*)StreamConfig.remoteInputAesKey,
+                                     sizeof(StreamConfig.remoteInputAesKey),
+                                     micRiKeyId, micSequenceNumber,
+                                     opusData, opusLength,
+                                     encryptedData, &encryptedLength)) {
             Limelog("MIC: Encryption failed\n");
             return -1;
         }
@@ -132,6 +125,28 @@ int LiSendMicrophoneOpusDataEx(const unsigned char* opusData, int opusLength, ui
 
         memcpy(packet, &header, sizeof(header));
         memcpy(packet + sizeof(header), opusData, opusLength);
+    }
+
+    if (!micFirstPacketLogged) {
+        // One line per stream to compare with the host line "Received first client
+        // microphone packet". riKeyId travels in the clear in the launch URL, so it
+        // is not a secret. The payload has at least 1 byte; print up to 16 bytes.
+        const unsigned char* payload = packet + sizeof(header);
+        int payloadLength = packetLength - (int)sizeof(header);
+        char payloadHex[16 * 2 + 1];
+        int i;
+
+        for (i = 0; i < payloadLength && i < 16; i++) {
+            snprintf(&payloadHex[i * 2], 3, "%02X", payload[i]);
+        }
+        payloadHex[i * 2] = 0;
+        micFirstPacketLogged = true;
+
+        Limelog("MIC: first packet: encryption %s (features supported 0x%" PRIx32 ", requested 0x%" PRIx32
+                ", enabled 0x%" PRIx32 "), riKeyId %" PRIu32 ", %d bytes Opus, payload %d bytes, first bytes %s\n",
+                (EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && micEncryptionCtx != NULL ? "on" : "off",
+                EncryptionFeaturesSupported, EncryptionFeaturesRequested, EncryptionFeaturesEnabled,
+                micRiKeyId, opusLength, payloadLength, payloadHex);
     }
 
     ++micSequenceNumber;

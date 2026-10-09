@@ -59,6 +59,22 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define MIC_PACKET_MAGIC 0x12345678
 #define MIC_PACKET_TYPE_OPUS 0x61
 #define MAX_MIC_PACKET_SIZE 1400
+#define MIC_IV_LEN 16
+
+// Length of x bytes after one PKCS#7 padding: 1 to 16 padding bytes, so a
+// multiple of 16 gets a full block. ROUND_TO_PKCS7_PADDED_LEN() rounds up
+// and gives x for a multiple of 16, which is not the PKCS#7 length.
+#define PKCS7_ENCRYPTED_LEN(x) ((((x) / 16) + 1) * 16)
+
+// Encrypts one Opus packet for the microphone stream (MicrophoneCrypto.c).
+// The output is AES-128-CBC with one PKCS#7 padding, as the host decrypts it.
+// *outputLength holds the output buffer size on entry and the encrypted length
+// on return. The buffer must hold PKCS7_ENCRYPTED_LEN(opusLength) bytes.
+bool encryptMicrophonePacket(PPLT_CRYPTO_CONTEXT ctx,
+                             const unsigned char* key, int keyLength,
+                             uint32_t riKeyId, uint16_t sequenceNumber,
+                             const unsigned char* opusData, int opusLength,
+                             unsigned char* output, int* outputLength);
 
 // ENet channel ID values
 #define CTRL_CHANNEL_GENERIC      0x00
