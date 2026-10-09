@@ -40,6 +40,25 @@ int main(void) {
     check(!parseSdpAttributeToUInt(sdpWithout, "x-ss-general.liveResize", &value) && value == 5,
           "missing liveResize attribute reported as present");
 
+    // A new connection clears the value of the previous connection. The start
+    // fails at the audio configuration check, before any network operation.
+    {
+        SERVER_INFORMATION serverInfo;
+        STREAM_CONFIGURATION streamConfig;
+
+        LiInitializeServerInformation(&serverInfo);
+        serverInfo.address = "127.0.0.1";
+        serverInfo.serverInfoAppVersion = "7.1.431.-1";
+        serverInfo.serverCodecModeSupport = SCM_H264;
+        LiInitializeStreamConfiguration(&streamConfig);
+        streamConfig.audioConfiguration = 0;
+
+        LiveResizeSupported = true;
+        check(LiStartConnection(&serverInfo, &streamConfig, NULL, NULL, NULL, NULL, 0, NULL, 0) != 0,
+              "LiStartConnection() did not fail with an incorrect audio configuration");
+        check(!LiIsLiveResizeSupported(), "LiStartConnection() did not clear the live resize value");
+    }
+
     if (failures != 0) {
         printf("%d checks failed\n", failures);
         return 1;

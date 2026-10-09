@@ -598,14 +598,17 @@ bool LiIsMicrophoneStreamActive(void);
 #define LI_RESIZE_REFUSED_NOT_SUPPORTED 7
 
 // Returns true when the host advertised live resize in the RTSP DESCRIBE reply
-// (SDP attribute x-ss-general.liveResize). False before a connection.
+// (SDP attribute x-ss-general.liveResize). The value is valid while a connection
+// is active. It is false before the RTSP handshake of the current connection.
 bool LiIsLiveResizeSupported(void);
 
 // Asks the host to change the stream and the virtual display to width x height.
 // The host answers only when it refuses (ConnListenerResizeRefused). On success,
 // *requestId receives the id of this request, which the refusal callback repeats.
 // Returns 0 when the request was sent, or -1 when the host does not support live
-// resize, the control stream is not encrypted, or no connection is active.
+// resize, the control stream is not encrypted, or the control stream is stopped.
+// This function may only be called between LiStartConnection() and LiStopConnection().
+// Do not call it at the same time as LiStopConnection(). Only one thread may call it.
 int LiSendResizeRequest(uint16_t width, uint16_t height, uint32_t* requestId);
 
 // This function returns an estimate of the current RTT to the host PC obtained via ENet
