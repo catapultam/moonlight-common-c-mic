@@ -92,10 +92,14 @@ int LiSendMicrophoneOpusDataEx(const unsigned char* opusData, int opusLength, ui
     if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && micEncryptionCtx != NULL) {
         unsigned char iv[MIC_IV_LEN] = {0};
         unsigned char encryptedData[ROUND_TO_PKCS7_PADDED_LEN(MAX_MIC_PACKET_SIZE)];
+        // PKCS7 padding may need to be added in-place, so we must copy this into a buffer
+        // that can safely be modified.
+        unsigned char paddedData[ROUND_TO_PKCS7_PADDED_LEN(MAX_MIC_PACKET_SIZE)];
         int encryptedLength = (int)sizeof(encryptedData);
         uint32_t ivSeq = BE32(micRiKeyId + micSequenceNumber);
 
         memcpy(iv, &ivSeq, sizeof(ivSeq));
+        memcpy(paddedData, opusData, opusLength);
 
         if (!PltEncryptMessage(micEncryptionCtx,
                                ALGORITHM_AES_CBC,
@@ -104,7 +108,7 @@ int LiSendMicrophoneOpusDataEx(const unsigned char* opusData, int opusLength, ui
                                sizeof(StreamConfig.remoteInputAesKey),
                                iv, sizeof(iv),
                                NULL, 0,
-                               (unsigned char*)opusData, opusLength,
+                               paddedData, opusLength,
                                encryptedData, &encryptedLength)) {
             Limelog("MIC: Encryption failed\n");
             return -1;
