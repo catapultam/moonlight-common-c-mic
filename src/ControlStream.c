@@ -31,6 +31,15 @@ typedef struct _NVCTL_ENCRYPTED_PACKET_HEADER {
     // encrypted NVCTL_ENET_PACKET_HEADER_V2 and payload data follow
 } NVCTL_ENCRYPTED_PACKET_HEADER, *PNVCTL_ENCRYPTED_PACKET_HEADER;
 
+#pragma pack(push, 1)
+// Payload of the resize request (Apollo live resize extension), little endian
+typedef struct _SS_RESIZE_REQUEST {
+    uint16_t width;
+    uint16_t height;
+    uint32_t requestId;
+} SS_RESIZE_REQUEST, *PSS_RESIZE_REQUEST;
+#pragma pack(pop)
+
 typedef struct _QUEUED_REFERENCE_FRAME_CONTROL {
     uint32_t startFrame;
     uint32_t endFrame;
@@ -83,6 +92,12 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
             uint8_t left[DS_EFFECT_PAYLOAD_SIZE];
             uint8_t right[DS_EFFECT_PAYLOAD_SIZE];
         } dsAdaptiveTrigger;
+        struct {
+            uint16_t width;
+            uint16_t height;
+            uint32_t requestId;
+            uint16_t reason;
+        } resizeRefused;
     } data;
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
@@ -121,6 +136,7 @@ static PLT_EVENT idrFrameRequiredEvent;
 
 static PPLT_CRYPTO_CONTEXT encryptionCtx;
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
+static uint32_t nextResizeRequestId;
 
 #define CONN_IMMEDIATE_POOR_LOSS_RATE 30
 #define CONN_CONSECUTIVE_POOR_LOSS_RATE 15
@@ -140,6 +156,8 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 #define IDX_SET_MOTION_EVENT 10
 #define IDX_SET_RGB_LED 11
 #define IDX_DS_ADAPTIVE_TRIGGERS 12
+#define IDX_RESIZE_REQUEST 13
+#define IDX_RESIZE_REFUSED 14
 
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
@@ -157,6 +175,9 @@ static const short packetTypesGen3[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set adaptive triggers (unused)
+    -1,     // Resize request (unused)
+    -1,     // Resize refused (unused)
 };
 static const short packetTypesGen4[] = {
     0x0606, // Request IDR frame
@@ -171,6 +192,9 @@ static const short packetTypesGen4[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set adaptive triggers (unused)
+    -1,     // Resize request (unused)
+    -1,     // Resize refused (unused)
 };
 static const short packetTypesGen5[] = {
     0x0305, // Start A
@@ -185,6 +209,9 @@ static const short packetTypesGen5[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set adaptive triggers (unused)
+    -1,     // Resize request (unused)
+    -1,     // Resize refused (unused)
 };
 static const short packetTypesGen7[] = {
     0x0305, // Start A
@@ -199,6 +226,9 @@ static const short packetTypesGen7[] = {
     -1,     // Rumble triggers (unused)
     -1,     // Set motion event (unused)
     -1,     // Set RGB LED (unused)
+    -1,     // Set adaptive triggers (unused)
+    -1,     // Resize request (unused)
+    -1,     // Resize refused (unused)
 };
 static const short packetTypesGen7Enc[] = {
     0x0302, // Request IDR frame
@@ -214,6 +244,8 @@ static const short packetTypesGen7Enc[] = {
     0x5501, // Set motion event (Sunshine protocol extension)
     0x5502, // Set RGB LED (Sunshine protocol extension)
     0x5503, // Set Adaptive Triggers (Sunshine protocol extension)
+    0x3100, // Resize request (Apollo live resize extension)
+    0x3101, // Resize refused (Apollo live resize extension)
 };
 
 static const char requestIdrFrameGen3[] = { 0, 0 };
@@ -305,6 +337,7 @@ int initializeControlStream(void) {
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
+    nextResizeRequestId = 1;
 
     encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
 
@@ -858,6 +891,31 @@ static bool sendMessageAndForget(short ptype, short paylen, const void* payload,
     return ret;
 }
 
+int LiSendResizeRequest(uint16_t width, uint16_t height, uint32_t* requestId) {
+    SS_RESIZE_REQUEST request;
+
+    // The request goes only to a Sunshine-type host over the encrypted control stream
+    if (!LiveResizeSupported || !IS_SUNSHINE() || !encryptedControlStream) {
+        return -1;
+    }
+
+    if (packetTypes[IDX_RESIZE_REQUEST] == -1 || peer == NULL || stopping) {
+        return -1;
+    }
+
+    request.width = LE16(width);
+    request.height = LE16(height);
+    request.requestId = LE32(nextResizeRequestId);
+
+    if (!sendMessageAndForget(packetTypes[IDX_RESIZE_REQUEST], sizeof(request), &request,
+                              CTRL_CHANNEL_GENERIC, ENET_PACKET_FLAG_RELIABLE, false)) {
+        return -1;
+    }
+
+    *requestId = nextResizeRequestId++;
+    return 0;
+}
+
 static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
     if (AppVersionQuad[0] >= 5) {
         if (!sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData)) {
@@ -1010,6 +1068,13 @@ static void asyncCallbackThreadFunc(void* context) {
                                                   queuedCb->data.dsAdaptiveTrigger.left,
                                                   queuedCb->data.dsAdaptiveTrigger.right);
             break;
+        case IDX_RESIZE_REFUSED:
+            // Refusals are infrequent and are not batched
+            ListenerCallbacks.resizeRefused(queuedCb->data.resizeRefused.width,
+                                            queuedCb->data.resizeRefused.height,
+                                            queuedCb->data.resizeRefused.requestId,
+                                            queuedCb->data.resizeRefused.reason);
+            break;
         default:
             // Unhandled packet type from queueAsyncCallback()
             LC_ASSERT(false);
@@ -1026,7 +1091,8 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_SET_MOTION_EVENT] ||
            packetType == packetTypes[IDX_SET_RGB_LED] ||
            packetType == packetTypes[IDX_HDR_INFO] ||
-           packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS];
+           packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS] ||
+           packetType == packetTypes[IDX_RESIZE_REFUSED];
 }
 
 static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
@@ -1086,6 +1152,14 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         BbGetBytes(&bb, queuedCb->data.dsAdaptiveTrigger.left, DS_EFFECT_PAYLOAD_SIZE);
         BbGetBytes(&bb, queuedCb->data.dsAdaptiveTrigger.right, DS_EFFECT_PAYLOAD_SIZE);
         queuedCb->typeIndex = IDX_DS_ADAPTIVE_TRIGGERS;
+    }
+    else if (ctlHdr->type == packetTypes[IDX_RESIZE_REFUSED]) {
+        BbGet16(&bb, &queuedCb->data.resizeRefused.width);
+        BbGet16(&bb, &queuedCb->data.resizeRefused.height);
+        BbGet32(&bb, &queuedCb->data.resizeRefused.requestId);
+        BbGet16(&bb, &queuedCb->data.resizeRefused.reason);
+
+        queuedCb->typeIndex = IDX_RESIZE_REFUSED;
     }
     else {
         // Unhandled packet type from needsAsyncCallback()

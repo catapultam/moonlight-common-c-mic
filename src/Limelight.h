@@ -488,6 +488,11 @@ typedef void(*ConnListenerSetAdaptiveTriggers)(uint16_t controllerNumber, uint8_
 // This callback is invoked to set a controller's RGB LED (if present).
 typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b);
 
+// This callback is invoked when the host refuses a resize request that was sent
+// with LiSendResizeRequest(). The reason is one of the LI_RESIZE_REFUSED_* values.
+// The host sends no message on success; the new size arrives in the video stream.
+typedef void(*ConnListenerResizeRefused)(uint16_t width, uint16_t height, uint32_t requestId, uint16_t reason);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -502,6 +507,7 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetMotionEventState setMotionEventState;
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
+    ConnListenerResizeRefused resizeRefused;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -581,6 +587,26 @@ bool LiIsMicrophoneEncryptionEnabled(void);
 
 // Indicates whether the host negotiated and initialized the microphone stream.
 bool LiIsMicrophoneStreamActive(void);
+
+// Reason codes for ConnListenerResizeRefused()
+#define LI_RESIZE_REFUSED_BUSY 1
+#define LI_RESIZE_REFUSED_NOT_VIRTUAL_DISPLAY 2
+#define LI_RESIZE_REFUSED_MULTIPLE_CLIENTS 3
+#define LI_RESIZE_REFUSED_SIZE_LIMIT 4
+#define LI_RESIZE_REFUSED_DISPLAY_FAILED 5
+#define LI_RESIZE_REFUSED_ENCODER_FAILED 6
+#define LI_RESIZE_REFUSED_NOT_SUPPORTED 7
+
+// Returns true when the host advertised live resize in the RTSP DESCRIBE reply
+// (SDP attribute x-ss-general.liveResize). False before a connection.
+bool LiIsLiveResizeSupported(void);
+
+// Asks the host to change the stream and the virtual display to width x height.
+// The host answers only when it refuses (ConnListenerResizeRefused). On success,
+// *requestId receives the id of this request, which the refusal callback repeats.
+// Returns 0 when the request was sent, or -1 when the host does not support live
+// resize, the control stream is not encrypted, or no connection is active.
+int LiSendResizeRequest(uint16_t width, uint16_t height, uint32_t* requestId);
 
 // This function returns an estimate of the current RTT to the host PC obtained via ENet
 // protocol statistics. This function will fail if the current GFE version does not use

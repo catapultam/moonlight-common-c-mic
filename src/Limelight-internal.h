@@ -45,6 +45,7 @@ extern SS_PING MicPingPayload;
 extern uint32_t ControlConnectData;
 
 extern uint32_t SunshineFeatureFlags;
+extern bool LiveResizeSupported;
 
 // Encryption flags shared by Sunshine and Moonlight in RTSP
 #define SS_ENC_CONTROL_V2 0x01
@@ -60,6 +61,9 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define MIC_PACKET_TYPE_OPUS 0x61
 #define MAX_MIC_PACKET_SIZE 1400
 #define MIC_IV_LEN 16
+
+// RtspConnection.c: reads an SDP attribute of the form a=name:value
+bool parseSdpAttributeToUInt(const char* payload, const char* name, uint32_t* val);
 
 // Length of x bytes after one PKCS#7 padding: 1 to 16 padding bytes, so a
 // multiple of 16 gets a full block. ROUND_TO_PKCS7_PADDED_LEN() rounds up

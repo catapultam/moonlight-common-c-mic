@@ -1149,6 +1149,17 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             SunshineFeatureFlags = 0;
         }
 
+        // Look for the live resize attribute (Apollo extension)
+        {
+            uint32_t liveResize;
+            if (parseSdpAttributeToUInt(response.payload, "x-ss-general.liveResize", &liveResize)) {
+                LiveResizeSupported = (liveResize != 0);
+            }
+            else {
+                LiveResizeSupported = false;
+            }
+        }
+
         // Look for the Sunshine encryption flags in the SDP attributes
         if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionSupported", &EncryptionFeaturesSupported)) {
             EncryptionFeaturesSupported = 0;

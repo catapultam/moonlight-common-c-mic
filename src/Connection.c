@@ -35,6 +35,7 @@ SS_PING VideoPingPayload;
 SS_PING MicPingPayload;
 uint32_t ControlConnectData;
 uint32_t SunshineFeatureFlags;
+bool LiveResizeSupported;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
