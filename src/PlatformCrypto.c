@@ -25,8 +25,10 @@ static int addPkcs7PaddingInPlace(unsigned char* plaintext, int plaintextLen) {
 //
 // CIPHER_FLAG_PAD_TO_BLOCK_SIZE and CIPHER_FLAG_FINISH may not be used on the same context.
 //
-// When CIPHER_FLAG_FINISH is used with CBC encryption, the output buffer size must be at
-// least ROUND_TO_PKCS7_PADDED_LEN(inputDataLength).
+// When CIPHER_FLAG_FINISH is used with CBC encryption, *outputDataLength must hold the
+// output buffer size on entry. The size must be at least the PKCS#7 length:
+// inputDataLength rounded up to 16, plus 16 when inputDataLength is a multiple of 16
+// (PKCS7_ENCRYPTED_LEN() in Limelight-internal.h).
 //
 // For GCM, the IV can change from message to message without CIPHER_FLAG_RESET_IV.
 // CIPHER_FLAG_RESET_IV is only required for GCM when the IV length changes.
@@ -156,7 +158,11 @@ bool PltEncryptMessage(PPLT_CRYPTO_CONTEXT ctx, int algorithm, int flags,
         if (flags & CIPHER_FLAG_FINISH) {
             size_t finishLength = 0;
 
-            if (psa_cipher_finish(&ctx->cipherOp, outputData + outLen, ROUND_TO_PKCS7_PADDED_LEN(inputDataLength) - outLen, &finishLength) != PSA_SUCCESS) {
+            // The PKCS#7 padding adds a full block when the input is a multiple of 16,
+            // so give the finish step all of the remaining output buffer.
+            if (*outputDataLength < 0 || (size_t)*outputDataLength < outLen ||
+                    psa_cipher_finish(&ctx->cipherOp, outputData + outLen, (size_t)*outputDataLength - outLen, &finishLength) != PSA_SUCCESS) {
+                psa_cipher_abort(&ctx->cipherOp);
                 ctx->cipherOpActive = false;
                 return false;
             }

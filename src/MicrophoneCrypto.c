@@ -20,7 +20,8 @@ bool encryptMicrophonePacket(PPLT_CRYPTO_CONTEXT ctx,
     // CIPHER_FLAG_FINISH lets the cipher add the PKCS#7 padding. Do not add
     // CIPHER_FLAG_PAD_TO_BLOCK_SIZE: with OpenSSL the two flags together add a
     // second padding block, which the host decrypts into bytes behind the
-    // Opus data. With PSA crypto both flag sets give the same bytes. Without
+    // Opus data. With PSA crypto the cipher also adds the PKCS#7 padding, and
+    // *outputLength gives the finish step its buffer size. Without
     // CIPHER_FLAG_PAD_TO_BLOCK_SIZE the input is not modified, so the cast is safe.
     return PltEncryptMessage(ctx,
                              ALGORITHM_AES_CBC,
