@@ -149,7 +149,9 @@ static uint32_t nextResizeRequestId;
 static uint32_t nextBitrateRequestId;
 
 // Cumulative video frame counters for the adaptive bitrate controller. Only the video
-// receive thread writes them; LiGetVideoFrameCounters() reads them with no lock.
+// receive thread writes them. frameCounterMutex keeps the two values a consistent pair
+// for LiGetVideoFrameCounters().
+static PLT_MUTEX frameCounterMutex;
 static uint32_t finishedFrameCount;
 static uint32_t lostFrameCount;
 
@@ -364,6 +366,7 @@ int initializeControlStream(void) {
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
+    PltCreateMutex(&frameCounterMutex);
     nextResizeRequestId = 1;
     nextBitrateRequestId = 1;
 
@@ -444,6 +447,7 @@ void destroyControlStream(void) {
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
 
     PltDeleteMutex(&enetMutex);
+    PltDeleteMutex(&frameCounterMutex);
 }
 
 static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) {
@@ -537,10 +541,16 @@ void connectionSawFrame(uint32_t frameIndex) {
     // Count before the early returns below. The frames from lastSeenFrame to frameIndex - 1
     // are finished now. A finished frame is lost unless connectionReceivedCompleteFrame()
     // reported it; frames after lastSeenFrame were never seen, thus lost.
+    // Change the two counters under one lock, so a reader never gets a pair with the
+    // lost count after this update and the finished count before it.
     if (lastSeenFrame != 0 && frameIndex != lastSeenFrame) {
         uint32_t finished = frameIndex - lastSeenFrame;
+        uint32_t lost = finished - (lastGoodFrame == lastSeenFrame ? 1 : 0);
+
+        PltLockMutex(&frameCounterMutex);
         finishedFrameCount += finished;
-        lostFrameCount += finished - (lastGoodFrame == lastSeenFrame ? 1 : 0);
+        lostFrameCount += lost;
+        PltUnlockMutex(&frameCounterMutex);
     }
 
     uint64_t now = PltGetMillis();
@@ -995,9 +1005,11 @@ bool parseBitrateStatusPayload(const char* payload, int length, PBITRATE_STATUS_
 }
 
 void LiGetVideoFrameCounters(uint32_t* finishedFrames, uint32_t* lostFrames) {
-    // No lock: a torn or old value is acceptable, as in LiGetEstimatedRttInfo()
+    // Read the two counters under one lock, so they are a consistent pair
+    PltLockMutex(&frameCounterMutex);
     *finishedFrames = finishedFrameCount;
     *lostFrames = lostFrameCount;
+    PltUnlockMutex(&frameCounterMutex);
 }
 
 static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {

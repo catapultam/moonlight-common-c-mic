@@ -646,8 +646,9 @@ int LiSendBitrateRequest(uint32_t configuredKbps, uint32_t* requestId);
 
 // Writes the number of video frames that finished (completed or lost) and the number
 // of lost frames since the start of the connection. A frame is finished when the
-// next frame starts. The values wrap at 2^32. Any thread may call this function; a
-// value can be one frame old.
+// next frame starts. The values wrap at 2^32. The two values are a consistent pair:
+// both come from the same moment. Any thread may call this function, but only
+// between LiStartConnection() and LiStopConnection().
 void LiGetVideoFrameCounters(uint32_t* finishedFrames, uint32_t* lostFrames);
 
 // This function returns an estimate of the current RTT to the host PC obtained via ENet

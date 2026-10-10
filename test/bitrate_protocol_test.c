@@ -61,6 +61,26 @@ int main(void) {
         check(!parseBitrateStatusPayload(payload, 0, &status), "an empty status was parsed");
     }
 
+    // Initialize the control stream as for a Sunshine host with an encrypted control
+    // stream. This creates the counter lock. No network operation occurs.
+    AppVersionQuad[0] = 7;
+    AppVersionQuad[1] = 1;
+    AppVersionQuad[2] = 431;
+    AppVersionQuad[3] = -1;
+    check(initializeControlStream() == 0, "initializeControlStream() failed");
+
+    // The configuredKbps == 0 guard. The test cannot capture the bytes on the wire or
+    // tell this guard from the peer == NULL guard: both return -1 with no peer.
+    {
+        DynamicBitrateSupported = true;
+        requestId = 77;
+        check(LiSendBitrateRequest(0, &requestId) == -1, "LiSendBitrateRequest(0) did not fail");
+        check(requestId == 77, "LiSendBitrateRequest(0) changed the id");
+        check(LiSendBitrateRequest(20000, &requestId) == -1, "LiSendBitrateRequest() did not fail with no peer");
+        check(requestId == 77, "LiSendBitrateRequest() with no peer changed the id");
+        DynamicBitrateSupported = false;
+    }
+
     // Finished and lost frames. Frame 3 never arrives, frame 4 starts but does not complete.
     {
         LiGetVideoFrameCounters(&finished, &lost);
@@ -82,6 +102,18 @@ int main(void) {
         connectionSawFrame(5);
         LiGetVideoFrameCounters(&finished, &lost);
         check(finished == 4 && lost == 2, "a repeated frame index changed the counters");
+
+        // A new control stream sets the counters to 0. The second initialization
+        // without destroyControlStream() leaks the first objects; this is a test only.
+        check(initializeControlStream() == 0, "the second initializeControlStream() failed");
+        LiGetVideoFrameCounters(&finished, &lost);
+        check(finished == 0 && lost == 0, "initializeControlStream() did not set the frame counters to 0");
+
+        // The count starts again from the first frame of the new stream
+        connectionSawFrame(10);
+        connectionSawFrame(12);
+        LiGetVideoFrameCounters(&finished, &lost);
+        check(finished == 2 && lost == 2, "the frame counters are wrong after the reset");
     }
 
     // A new connection clears the value of the previous connection. The start
