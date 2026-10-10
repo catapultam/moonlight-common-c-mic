@@ -32,7 +32,9 @@ typedef struct _NVCTL_ENCRYPTED_PACKET_HEADER {
 } NVCTL_ENCRYPTED_PACKET_HEADER, *PNVCTL_ENCRYPTED_PACKET_HEADER;
 
 #pragma pack(push, 1)
-// Payload of the resize request (Apollo live resize extension), little endian
+// Payload of the resize request (Apollo live resize extension), little endian on the
+// wire. Both ends convert it explicitly: LE16()/LE32() here and on the host, and a
+// BYTE_ORDER_LITTLE byte buffer for the RESIZE_REFUSED payload.
 typedef struct _SS_RESIZE_REQUEST {
     uint16_t width;
     uint16_t height;
