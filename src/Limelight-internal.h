@@ -46,6 +46,7 @@ extern uint32_t ControlConnectData;
 
 extern uint32_t SunshineFeatureFlags;
 extern bool LiveResizeSupported;
+extern bool DynamicBitrateSupported;
 
 // Encryption flags shared by Sunshine and Moonlight in RTSP
 #define SS_ENC_CONTROL_V2 0x01
@@ -64,6 +65,20 @@ extern uint32_t EncryptionFeaturesEnabled;
 
 // RtspConnection.c: reads an SDP attribute of the form a=name:value
 bool parseSdpAttributeToUInt(const char* payload, const char* name, uint32_t* val);
+
+// ControlStream.c: payload of BITRATE_STATUS (Apollo adaptive bitrate extension)
+#define BITRATE_STATUS_PAYLOAD_LENGTH 18
+typedef struct _BITRATE_STATUS_PAYLOAD {
+    uint32_t requestId;
+    uint32_t requestedKbps;
+    uint32_t acceptedKbps;
+    uint32_t encoderKbps;
+    uint16_t status;
+} BITRATE_STATUS_PAYLOAD, *PBITRATE_STATUS_PAYLOAD;
+
+// Reads a little endian BITRATE_STATUS payload. Returns false when length is less than
+// BITRATE_STATUS_PAYLOAD_LENGTH; the caller then drops the message.
+bool parseBitrateStatusPayload(const char* payload, int length, PBITRATE_STATUS_PAYLOAD status);
 
 // Length of x bytes after one PKCS#7 padding: 1 to 16 padding bytes, so a
 // multiple of 16 gets a full block. ROUND_TO_PKCS7_PADDED_LEN() rounds up

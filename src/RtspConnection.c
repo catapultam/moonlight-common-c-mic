@@ -1160,6 +1160,17 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             }
         }
 
+        // Look for the adaptive bitrate attribute (Apollo extension)
+        {
+            uint32_t dynamicBitrate;
+            if (parseSdpAttributeToUInt(response.payload, "x-ss-general.dynamicBitrate", &dynamicBitrate)) {
+                DynamicBitrateSupported = (dynamicBitrate != 0);
+            }
+            else {
+                DynamicBitrateSupported = false;
+            }
+        }
+
         // Look for the Sunshine encryption flags in the SDP attributes
         if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.encryptionSupported", &EncryptionFeaturesSupported)) {
             EncryptionFeaturesSupported = 0;

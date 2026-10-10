@@ -42,6 +42,7 @@ static void fakeClSetMotionEventState(uint16_t controllerNumber, uint8_t motionT
 static void fakeClSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlags, uint8_t typeLeft, uint8_t typeRight, uint8_t *left, uint8_t *right) {};
 static void fakeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b) {}
 static void fakeClResizeRefused(uint16_t width, uint16_t height, uint32_t requestId, uint16_t reason) {}
+static void fakeClBitrateStatus(uint32_t requestId, uint32_t requestedKbps, uint32_t acceptedKbps, uint32_t encoderKbps, uint16_t status) {}
 
 static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .stageStarting = fakeClStageStarting,
@@ -58,6 +59,7 @@ static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .setControllerLED = fakeClSetControllerLED,
     .setAdaptiveTriggers = fakeClSetAdaptiveTriggers,
     .resizeRefused = fakeClResizeRefused,
+    .bitrateStatus = fakeClBitrateStatus,
 };
 
 void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_RENDERER_CALLBACKS* arCallbacks,
@@ -150,6 +152,9 @@ void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_REND
         }
         if ((*clCallbacks)->resizeRefused == NULL) {
             (*clCallbacks)->resizeRefused = fakeClResizeRefused;
+        }
+        if ((*clCallbacks)->bitrateStatus == NULL) {
+            (*clCallbacks)->bitrateStatus = fakeClBitrateStatus;
         }
     }
 }

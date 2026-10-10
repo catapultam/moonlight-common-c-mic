@@ -336,6 +336,12 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
     LC_ASSERT(ret == 0);
 
     if (queue->bufferDataPackets != queue->receivedDataPackets) {
+        // The adaptive bitrate controller reads this with LiGetRTPVideoStats(). Before this
+        // change only the audio queue counted recovered packets.
+        if (ret == 0) {
+            queue->stats.packetCountFecRecovered += queue->bufferDataPackets - queue->receivedDataPackets;
+        }
+
 #ifdef FEC_VERBOSE
         Limelog("Recovered %d video data shards from frame %d\n",
                 queue->bufferDataPackets - queue->receivedDataPackets,

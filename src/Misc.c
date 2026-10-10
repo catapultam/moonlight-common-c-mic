@@ -159,3 +159,7 @@ uint32_t LiGetHostFeatureFlags(void) {
 bool LiIsLiveResizeSupported(void) {
     return LiveResizeSupported;
 }
+
+bool LiIsDynamicBitrateSupported(void) {
+    return DynamicBitrateSupported;
+}

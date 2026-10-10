@@ -493,6 +493,14 @@ typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r
 // The host sends no message on success; the new size arrives in the video stream.
 typedef void(*ConnListenerResizeRefused)(uint16_t width, uint16_t height, uint32_t requestId, uint16_t reason);
 
+// This callback is invoked when the host answers a bitrate request that was sent
+// with LiSendBitrateRequest(). The status is one of the LI_BITRATE_STATUS_* values.
+// acceptedKbps is the configured bitrate after the host cap, and encoderKbps is the
+// bitrate of the host encoder. For a refusal (status 3 to 6) both are the values
+// that run now.
+typedef void(*ConnListenerBitrateStatus)(uint32_t requestId, uint32_t requestedKbps, uint32_t acceptedKbps,
+                                         uint32_t encoderKbps, uint16_t status);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -508,6 +516,7 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
     ConnListenerResizeRefused resizeRefused;
+    ConnListenerBitrateStatus bitrateStatus;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -610,6 +619,36 @@ bool LiIsLiveResizeSupported(void);
 // This function may only be called between LiStartConnection() and LiStopConnection().
 // Do not call it at the same time as LiStopConnection(). Only one thread may call it.
 int LiSendResizeRequest(uint16_t width, uint16_t height, uint32_t* requestId);
+
+// Status codes for ConnListenerBitrateStatus()
+#define LI_BITRATE_STATUS_APPLIED 0
+#define LI_BITRATE_STATUS_APPLIED_RESTART 1
+#define LI_BITRATE_STATUS_UNCHANGED 2
+#define LI_BITRATE_STATUS_NOT_SUPPORTED 3
+#define LI_BITRATE_STATUS_INVALID 4
+#define LI_BITRATE_STATUS_ENCODER_FAILED 5
+#define LI_BITRATE_STATUS_INPUT_ONLY 6
+
+// Returns true when the host advertised bitrate changes in the RTSP DESCRIBE reply
+// (SDP attribute x-ss-general.dynamicBitrate). The value is valid while a connection
+// is active. It is false before the RTSP handshake of the current connection.
+bool LiIsDynamicBitrateSupported(void);
+
+// Asks the host to change the video bitrate to configuredKbps. The unit is the
+// configured bitrate (the same as StreamConfig.bitrate); the host makes the FEC,
+// audio and overhead reductions. The host answers each request with
+// ConnListenerBitrateStatus(). On success, *requestId receives the id of this request.
+// Returns 0 when the request was sent, or -1 when the host does not support it, the
+// control stream is not encrypted, the control stream is stopped or configuredKbps is 0.
+// This function may only be called between LiStartConnection() and LiStopConnection().
+// Do not call it at the same time as LiStopConnection(). Only one thread may call it.
+int LiSendBitrateRequest(uint32_t configuredKbps, uint32_t* requestId);
+
+// Writes the number of video frames that finished (completed or lost) and the number
+// of lost frames since the start of the connection. A frame is finished when the
+// next frame starts. The values wrap at 2^32. Any thread may call this function; a
+// value can be one frame old.
+void LiGetVideoFrameCounters(uint32_t* finishedFrames, uint32_t* lostFrames);
 
 // This function returns an estimate of the current RTT to the host PC obtained via ENet
 // protocol statistics. This function will fail if the current GFE version does not use

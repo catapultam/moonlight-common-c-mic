@@ -36,6 +36,7 @@ SS_PING MicPingPayload;
 uint32_t ControlConnectData;
 uint32_t SunshineFeatureFlags;
 bool LiveResizeSupported;
+bool DynamicBitrateSupported;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
@@ -223,6 +224,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     // The RTSP DESCRIBE reply of this connection sets this value again
     LiveResizeSupported = false;
+    DynamicBitrateSupported = false;
 
     if (drCallbacks != NULL && (drCallbacks->capabilities & CAPABILITY_PULL_RENDERER) && drCallbacks->submitDecodeUnit) {
         Limelog("CAPABILITY_PULL_RENDERER cannot be set with a submitDecodeUnit callback\n");

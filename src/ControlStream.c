@@ -40,6 +40,12 @@ typedef struct _SS_RESIZE_REQUEST {
     uint16_t height;
     uint32_t requestId;
 } SS_RESIZE_REQUEST, *PSS_RESIZE_REQUEST;
+
+// Payload of SET_BITRATE (Apollo adaptive bitrate extension), little endian on the wire
+typedef struct _SS_BITRATE_REQUEST {
+    uint32_t requestId;
+    uint32_t configuredKbps;
+} SS_BITRATE_REQUEST, *PSS_BITRATE_REQUEST;
 #pragma pack(pop)
 
 typedef struct _QUEUED_REFERENCE_FRAME_CONTROL {
@@ -100,6 +106,7 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
             uint32_t requestId;
             uint16_t reason;
         } resizeRefused;
+        BITRATE_STATUS_PAYLOAD bitrateStatus;
     } data;
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
@@ -139,6 +146,12 @@ static PLT_EVENT idrFrameRequiredEvent;
 static PPLT_CRYPTO_CONTEXT encryptionCtx;
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 static uint32_t nextResizeRequestId;
+static uint32_t nextBitrateRequestId;
+
+// Cumulative video frame counters for the adaptive bitrate controller. Only the video
+// receive thread writes them; LiGetVideoFrameCounters() reads them with no lock.
+static uint32_t finishedFrameCount;
+static uint32_t lostFrameCount;
 
 #define CONN_IMMEDIATE_POOR_LOSS_RATE 30
 #define CONN_CONSECUTIVE_POOR_LOSS_RATE 15
@@ -160,6 +173,8 @@ static uint32_t nextResizeRequestId;
 #define IDX_DS_ADAPTIVE_TRIGGERS 12
 #define IDX_RESIZE_REQUEST 13
 #define IDX_RESIZE_REFUSED 14
+#define IDX_SET_BITRATE 15
+#define IDX_BITRATE_STATUS 16
 
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
@@ -180,6 +195,8 @@ static const short packetTypesGen3[] = {
     -1,     // Set adaptive triggers (unused)
     -1,     // Resize request (unused)
     -1,     // Resize refused (unused)
+    -1,     // Set bitrate (unused)
+    -1,     // Bitrate status (unused)
 };
 static const short packetTypesGen4[] = {
     0x0606, // Request IDR frame
@@ -197,6 +214,8 @@ static const short packetTypesGen4[] = {
     -1,     // Set adaptive triggers (unused)
     -1,     // Resize request (unused)
     -1,     // Resize refused (unused)
+    -1,     // Set bitrate (unused)
+    -1,     // Bitrate status (unused)
 };
 static const short packetTypesGen5[] = {
     0x0305, // Start A
@@ -214,6 +233,8 @@ static const short packetTypesGen5[] = {
     -1,     // Set adaptive triggers (unused)
     -1,     // Resize request (unused)
     -1,     // Resize refused (unused)
+    -1,     // Set bitrate (unused)
+    -1,     // Bitrate status (unused)
 };
 static const short packetTypesGen7[] = {
     0x0305, // Start A
@@ -231,6 +252,8 @@ static const short packetTypesGen7[] = {
     -1,     // Set adaptive triggers (unused)
     -1,     // Resize request (unused)
     -1,     // Resize refused (unused)
+    -1,     // Set bitrate (unused)
+    -1,     // Bitrate status (unused)
 };
 static const short packetTypesGen7Enc[] = {
     0x0302, // Request IDR frame
@@ -248,6 +271,8 @@ static const short packetTypesGen7Enc[] = {
     0x5503, // Set Adaptive Triggers (Sunshine protocol extension)
     0x3100, // Resize request (Apollo live resize extension)
     0x3101, // Resize refused (Apollo live resize extension)
+    0x3102, // Set bitrate (Apollo adaptive bitrate extension)
+    0x3103, // Bitrate status (Apollo adaptive bitrate extension)
 };
 
 static const char requestIdrFrameGen3[] = { 0, 0 };
@@ -340,6 +365,7 @@ int initializeControlStream(void) {
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
     nextResizeRequestId = 1;
+    nextBitrateRequestId = 1;
 
     encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
 
@@ -378,6 +404,8 @@ int initializeControlStream(void) {
 
     lastGoodFrame = 0;
     lastSeenFrame = 0;
+    finishedFrameCount = 0;
+    lostFrameCount = 0;
     disconnectPending = false;
     intervalGoodFrameCount = 0;
     intervalTotalFrameCount = 0;
@@ -505,6 +533,15 @@ void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
 
 void connectionSawFrame(uint32_t frameIndex) {
     LC_ASSERT_VT(!isBefore16(frameIndex, lastSeenFrame));
+
+    // Count before the early returns below. The frames from lastSeenFrame to frameIndex - 1
+    // are finished now. A finished frame is lost unless connectionReceivedCompleteFrame()
+    // reported it; frames after lastSeenFrame were never seen, thus lost.
+    if (lastSeenFrame != 0 && frameIndex != lastSeenFrame) {
+        uint32_t finished = frameIndex - lastSeenFrame;
+        finishedFrameCount += finished;
+        lostFrameCount += finished - (lastGoodFrame == lastSeenFrame ? 1 : 0);
+    }
 
     uint64_t now = PltGetMillis();
 
@@ -918,6 +955,51 @@ int LiSendResizeRequest(uint16_t width, uint16_t height, uint32_t* requestId) {
     return 0;
 }
 
+int LiSendBitrateRequest(uint32_t configuredKbps, uint32_t* requestId) {
+    SS_BITRATE_REQUEST request;
+
+    // The request goes only to a Sunshine-type host over the encrypted control stream
+    if (!DynamicBitrateSupported || !IS_SUNSHINE() || !encryptedControlStream || configuredKbps == 0) {
+        return -1;
+    }
+
+    if (packetTypes[IDX_SET_BITRATE] == -1 || peer == NULL || stopping) {
+        return -1;
+    }
+
+    request.requestId = LE32(nextBitrateRequestId);
+    request.configuredKbps = LE32(configuredKbps);
+
+    if (!sendMessageAndForget(packetTypes[IDX_SET_BITRATE], sizeof(request), &request,
+                              CTRL_CHANNEL_GENERIC, ENET_PACKET_FLAG_RELIABLE, false)) {
+        return -1;
+    }
+
+    *requestId = nextBitrateRequestId++;
+    return 0;
+}
+
+bool parseBitrateStatusPayload(const char* payload, int length, PBITRATE_STATUS_PAYLOAD status) {
+    BYTE_BUFFER bb;
+
+    if (length < BITRATE_STATUS_PAYLOAD_LENGTH) {
+        return false;
+    }
+
+    BbInitializeWrappedBuffer(&bb, (char*)payload, 0, length, BYTE_ORDER_LITTLE);
+    return BbGet32(&bb, &status->requestId) &&
+           BbGet32(&bb, &status->requestedKbps) &&
+           BbGet32(&bb, &status->acceptedKbps) &&
+           BbGet32(&bb, &status->encoderKbps) &&
+           BbGet16(&bb, &status->status);
+}
+
+void LiGetVideoFrameCounters(uint32_t* finishedFrames, uint32_t* lostFrames) {
+    // No lock: a torn or old value is acceptable, as in LiGetEstimatedRttInfo()
+    *finishedFrames = finishedFrameCount;
+    *lostFrames = lostFrameCount;
+}
+
 static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
     if (AppVersionQuad[0] >= 5) {
         if (!sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData)) {
@@ -1077,6 +1159,14 @@ static void asyncCallbackThreadFunc(void* context) {
                                             queuedCb->data.resizeRefused.requestId,
                                             queuedCb->data.resizeRefused.reason);
             break;
+        case IDX_BITRATE_STATUS:
+            // Each request gets one answer; answers are not batched
+            ListenerCallbacks.bitrateStatus(queuedCb->data.bitrateStatus.requestId,
+                                            queuedCb->data.bitrateStatus.requestedKbps,
+                                            queuedCb->data.bitrateStatus.acceptedKbps,
+                                            queuedCb->data.bitrateStatus.encoderKbps,
+                                            queuedCb->data.bitrateStatus.status);
+            break;
         default:
             // Unhandled packet type from queueAsyncCallback()
             LC_ASSERT(false);
@@ -1094,7 +1184,8 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_SET_RGB_LED] ||
            packetType == packetTypes[IDX_HDR_INFO] ||
            packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS] ||
-           packetType == packetTypes[IDX_RESIZE_REFUSED];
+           packetType == packetTypes[IDX_RESIZE_REFUSED] ||
+           packetType == packetTypes[IDX_BITRATE_STATUS];
 }
 
 static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
@@ -1162,6 +1253,17 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         BbGet16(&bb, &queuedCb->data.resizeRefused.reason);
 
         queuedCb->typeIndex = IDX_RESIZE_REFUSED;
+    }
+    else if (ctlHdr->type == packetTypes[IDX_BITRATE_STATUS]) {
+        // A short payload would leave fields unset. Drop it.
+        if (!parseBitrateStatusPayload((char*)(ctlHdr + 1), packetLength - (int)sizeof(*ctlHdr),
+                                       &queuedCb->data.bitrateStatus)) {
+            Limelog("Dropping a short bitrate status message (%d bytes)\n", packetLength - (int)sizeof(*ctlHdr));
+            free(queuedCb);
+            return;
+        }
+
+        queuedCb->typeIndex = IDX_BITRATE_STATUS;
     }
     else {
         // Unhandled packet type from needsAsyncCallback()
